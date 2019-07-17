@@ -1,0 +1,128 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[161]:
+
+
+import torch
+import pandas as pd
+import numpy as np
+import torch.nn as nn
+import torch.nn.functional as F
+from sklearn.metrics import *
+from torch.optim import Adam
+from torch.utils.data import Dataset, DataLoader
+
+
+# In[162]:
+
+
+class countydata(Dataset):
+    def __init__(self):
+        adjacency = np.load('QueenNumpyArray.npy')
+        dataframe = pd.read_csv('2007-suicides-features.csv',na_values = ['N','-','2,500-']).fillna(value=0).values[:58,:]
+        print(adjacency.shape)
+        #ind = dataframe[:,1].astype('int')
+        #print(adjacency[ind])
+        self.a = np.identity(58)
+        self.y = np.array(dataframe[:,2]).astype('float')
+        self.v = np.array(dataframe[:,4:]).astype('float')
+    def __len__(self):
+        return 1 #temp 1 example
+    def __getitem__(self, index):
+        #index is index of the sample
+        #select what data example we want to pass
+        #v is features, a is adj. matrix, y is the labels for counties
+        return [self.v, self.a, self.y]
+
+
+# In[163]:
+
+
+class graphgcnn(nn.Module):
+    #nodes is counties and features are features lmao
+    def __init__(self, nb_features_pernode, nb_features):
+        super(graphgcnn,self).__init__()
+        self.linear = nn.Linear(nb_features_pernode, nb_features)
+        #self.act = nn.Relu()
+    def forward(self, v, a):
+        #message passing between nodes
+        v_prime = torch.matmul(a,v)
+        #feature mapping on a per node basis
+        v_prime = self.linear(v_prime)
+        #update v_prime and pass through act function
+        v_prime = F.relu(v_prime)
+        return v_prime
+
+class modelgcnn(nn.Module):
+    def __init__(self):
+        super(modelgcnn,self).__init__()
+        self.conv = graphgcnn(452,32)
+        self.conv2 = graphgcnn(32,64)
+        self.classer = nn.Linear(64,2)
+    def forward(self, v, a):
+        y = self.conv(v,a)
+        y = self.conv2(y,a)
+        y = self.classer(y)
+        return y
+
+
+# In[166]:
+
+
+def main():
+    dataset = countydata()
+    #batch_size is default value
+    dataloader = DataLoader(dataset, batch_size = 1, shuffle = True, num_workers = 1)
+    graphgcnn = modelgcnn()
+    #categorical crossentrophy
+    lossfunct = nn.CrossEntropyLoss()
+    #lr = learning rate default is .0001
+    optimizer = Adam(graphgcnn.parameters(),lr = .0001)
+    
+    for e in range(0,500):
+        preds = []
+        trues = []
+    
+        for i,data in enumerate(dataloader):
+            v,a,y = data
+            #print(v.size(),a.size(),y.size())
+            #casting v and a to a float, forward pass
+            out = graphgcnn(v.float(),a.float())
+            out2 = out.view((58,2))
+            y2 = y.view((58))
+            optimizer.zero_grad()
+            loss = lossfunct(out2,y2.long())
+            loss.backward()
+            optimizer.step()
+            if e > 400:
+                print('Loss: ',loss.detach().numpy())
+            out2 = F.softmax(out2,dim = 1)
+            #detach removes from model (not in graph anymore)
+            preds.append(out2.detach().numpy())
+            trues.append(y2.detach().numpy())
+        preds = np.concatenate(preds, axis=0)
+        trues = np.concatenate(trues, axis=0)
+        trues_temp = []
+        for t in preds:
+            trues_temp.append(np.argmax(t))
+
+        preds = np.array(trues_temp)
+        if e > 400:
+            print('Accuracy: ',accuracy_score(trues,preds))
+            print('auc',roc_auc_score(trues, preds))
+        
+    
+
+
+# In[167]:
+
+
+main()
+
+
+# In[ ]:
+
+
+
+
